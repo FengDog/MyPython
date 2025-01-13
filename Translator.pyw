@@ -2,6 +2,7 @@ import os
 from tkinter import *
 from tkinter import ttk
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import range_boundaries
 import tkinter.filedialog as ttfiledialog
 import re
 import json
@@ -9,8 +10,10 @@ import pyperclip as MyClipboard
 import pyautogui
 import time
 import requests
-import chardet
 import shutil
+import pandas as pd
+import xlrd
+import xlwt
 
 def gooletranslate(key, source_language='CN-简体', target_language='EN-英语'):
     target_language_dict={
@@ -129,7 +132,7 @@ class myTranslator:
         "SV":"1252",
         "TR-土耳其":"1254",
         "FA-波斯":"1256",
-        "MA-马来西亚":"utf-8",#
+        "MA-马来西亚":"utf-8",
         "SR":"1252",
         "VN-越南":"1258",
         "ID-印尼":"Unicode",
@@ -138,6 +141,26 @@ class myTranslator:
     def on_closing(self):
         self.MyGUI.after_cancel(self.updateId)
         self.MyGUI.destroy()
+    
+    def read_excel_sheets(self, file_path, chinese_content_set):
+        # 需要读取的sheet名称
+        sheet_names = ['EcuInfo', 'ReadCds', 'FreezeFrame', 'Text', 'Stat', 'Dtc', 'Lookup', 'Menu']
+
+        # 读取每个指定的sheet
+        for sheet in sheet_names:
+            try:
+                # 使用pandas读取sheet，跳过第一行
+                df = pd.read_excel(file_path, sheet_name=sheet, header=0)
+                for column in df.columns:
+                    for value in df[column][0:]:
+                        if isinstance(value, str) and re.search(r'[\u4e00-\u9fff]', value):  # 检查是否包含中文
+                            value = value.strip()
+                            chinese_content_set.add(value)
+            
+            except Exception as e:
+                print(f"读取sheet '{sheet}' 失败: {e}")
+
+        return 0
 
     def AddValue2Dict(self,k,v):
         if k not in self.ExistDataDict:
@@ -246,7 +269,7 @@ class myTranslator:
         self.f_path=""
         self.MyGUI = Tk()
         self.MyGUI.title("翻译文档")
-        self.MyGUI.geometry('947x482+10+10')
+        self.MyGUI.geometry('950x482+10+10')
         #语言选择
         LangueTips = Label(self.MyGUI,justify = 'left',anchor='n', text='选择翻译的语言：')
         LangueTips.grid(row=0, column=0)
@@ -259,7 +282,7 @@ class myTranslator:
         ObjTips = Label(self.MyGUI,justify = 'left', text='选择翻译的对象：')
         ObjTips.grid(row=0, column=1)
         self.ObjSelect = ttk.Combobox(self.MyGUI,width=15)
-        self.ObjSelect['value'] = ("所有.txt","ALL","DTC.txt","TEXT.txt","DS.txt","DTC_H.txt","MENU.txt","ROOT.txt","QuickInfo.txt","EXCEL.xls")
+        self.ObjSelect['value'] = ("所有.txt","DTC.txt","TEXT.txt","DS.txt","DTC_H.txt","MENU.txt","ROOT.txt","QuickInfo.txt","idm_2_module.txt","EXCEL.xls")
         self.ObjSelect.current(0)
         self.ObjSelect.grid(row=1, column=1, sticky='NS')
         
@@ -294,6 +317,13 @@ class myTranslator:
 
         FileSelect = Button(self.MyGUI,text="提取ROOT工程IDM",bg='lightblue',command = self.GetIDM)
         FileSelect.grid(row=3,column=4, sticky='EW')
+        
+        #添加一个有两个选项的开关，用于选择追加txt文件还是替换原文件
+        self.AppendFile = IntVar()
+        self.AppendFile.set(1)
+        AppendFile = Checkbutton(self.MyGUI, text="追加提取", variable=self.AppendFile, onvalue=1, offvalue=0)
+        AppendFile.grid(row=0, column=6, columnspan=2, sticky='EW')
+        
 
         #添加一个开关，用于获取文件夹内所有文件
         self.CheckAll = IntVar()
@@ -304,7 +334,7 @@ class myTranslator:
         LogTips = Label(self.MyGUI,justify = 'left',text = "实时日志：")
         LogTips.grid(row=3,column = 0)
         self.LogBox = Text(self.MyGUI, width=133, height=30)
-        self.LogBox.place(x=5,y=85)
+        self.LogBox.place(x=5,y=89)
 
         self.MyGUI.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.UpDataGUI()
@@ -317,6 +347,137 @@ class myTranslator:
         else:
             self.ObjSelect.config(state='normal')
             self.FormatAdjust.config(state='normal')
+
+    def GetExcelInfo(self):
+        #获取文件夹内的所有.xls文件,如果还有子文件夹，递归
+        file_list = []
+        #定义空set
+        chinese_content_set = set()
+        try:#没有选择文件夹
+            for file in os.listdir(self.DataPath):
+                if file.endswith(".xls"):
+                    file_list.append(os.path.join(self.DataPath, file))
+            total_files = len(file_list)
+            self.progress["maximum"] = total_files
+            self.progress["value"] = 0
+            self.UpdataLog("*************************************开始提取*"+"\n")
+            for file_path in file_list:
+                self.read_excel_sheets(file_path, chinese_content_set)
+                self.progress["value"] += 1
+                self.MyGUI.update()
+            # 保存中文内容到文件
+            if self.AppendFile.get() == 1:
+                with open(self.DataPath + "CN_NeedTrans.txt", "a", encoding=self.encodingDict["CN-简体"], errors='replace') as f:
+                    for content in chinese_content_set:
+                        f.write(content + "\n")
+            else:
+                with open(self.DataPath + "CN_NeedTrans.txt", "w", encoding=self.encodingDict["CN-简体"], errors='replace') as f:
+                    for content in chinese_content_set:
+                        f.write(content + "\n")
+            self.UpdataLog("*************************************提取完成*"+"\n")
+        except:
+            self.UpdataLog("********************************未选择文件夹*")
+            return 0
+    
+    def CExcelToOther(self):
+        #获取文件夹内的所有.xls文件
+        file_list = []
+        try:#没有选择文件夹
+            for file in os.listdir(self.DataPath):
+                if file.endswith(".xls"):
+                    file_list.append(os.path.join(self.DataPath, file))
+        except:
+            self.UpdataLog("********************************未选择文件夹*")        
+        # 根据翻译语言建立对应文件夹，如EN_英语
+        total_files = len(file_list)
+        self.progress["maximum"] = total_files
+        self.progress["value"] = 0
+
+        if self.strVehicel=="":
+                return 0
+
+        self.LangueSelect.update()
+        LangueList = [self.LangueSelect.get()]
+        
+        for Langue in LangueList:
+            self.strOutPath = self.DataPath+Langue+"/"
+            # 创建目标文件夹
+            if not os.path.exists(self.strOutPath):
+                os.makedirs(self.strOutPath)
+            for file_path in file_list:
+                # 创建目标文件
+                file_name = file_path.split("/")[-1]
+                Languehead = Langue[0:2]
+                # 如果文件名以 CN_ 开头，则替换为当前翻译语言的前两个字母
+                if file_name.find("CN_")!=-1:
+                    file_name = file_name.replace("CN_", Languehead + "_")
+                # 修改文件名
+                file_target = os.path.join(self.strOutPath, file_name)
+                # 确保目标文件夹存在，如果不存在则创建
+                file_target_dir = os.path.dirname(file_target)
+                if not os.path.exists(file_target_dir):
+                    os.makedirs(file_target_dir)
+                # 复制原文件到目标文件夹,如果存在则覆盖
+                shutil.copy(file_path, file_target)
+                self.read_excel_sheets_and_Tran(file_target)
+                self.progress["value"] += 1
+                self.MyGUI.update()
+
+    def read_excel_sheets_and_Tran(self, file_path):
+        # 需要读取的sheet名称
+        sheet_names = ['EcuInfo', 'ReadCds', 'FreezeFrame', 'Text', 'Stat', 'Dtc', 'Lookup', 'Menu']
+        
+        # 加载 Excel 文件
+        workbook_read = xlrd.open_workbook(file_path, formatting_info=True)
+        
+        # 创建新的工作簿用于写入
+        workbook_write = xlwt.Workbook()
+        
+        # 遍历原工作簿中的所有 sheet
+        for sheet in workbook_read.sheet_names():
+            try:
+                # 获取当前 sheet
+                current_sheet = workbook_read.sheet_by_name(sheet)
+                # 创建一个对应的 sheet 在新的工作簿中
+                new_sheet = workbook_write.add_sheet(sheet)
+
+                # 读取数据,第一行数据和格式直接写入新工作簿
+                for row_idx in range(current_sheet.nrows):
+                    for col_idx in range(current_sheet.ncols):
+                        value = current_sheet.cell_value(row_idx, col_idx)
+                        
+                        # 直接写入第一行数据
+                        if row_idx == 0:
+                            new_sheet.write(row_idx, col_idx, value)
+                        else:
+                            # 检查当前 sheet 是否在需要处理的 sheet 列表中
+                            if sheet in sheet_names:
+                                if sheet == "Lookup":
+                                    if col_idx == 0 and row_idx <=2:
+                                        new_sheet.write(row_idx, col_idx, value)
+                                        continue
+                                # 检查是否为中文
+                                if isinstance(value, str) and re.search(r'[\u4e00-\u9fff]', value):
+                                    value = value.strip()
+                                    ENvalue = self.getTargeValue(value)
+                                    if ENvalue == "":
+                                        self.UpdataLog(sheet + ':' + value + ' ' + "未翻译\n")
+                                    else:
+                                        # 翻译成功则替换原文
+                                        value = ENvalue
+                                # 如果该列为单位列，则替换单位
+                                if current_sheet.cell_value(0, col_idx) == "单位":
+                                    value = self.replace_chinese_symbol(value.strip())
+                            
+                            # 将处理好的值写入新工作簿
+                            new_sheet.write(row_idx, col_idx, value)
+
+            except Exception as e:
+                self.UpdataLog(f"处理sheet '{sheet}' 失败: {e}")
+
+        # 保存修改后的 Excel 文件
+        workbook_write.save(file_path)
+        return 0
 
     def UpDataGUI(self):
         self.MyGUI.update()
@@ -358,7 +519,7 @@ class myTranslator:
             if self.ObjSelect.get()=="ALL":
                 FileTypeList = ["DTC.txt","TEXT.txt","DS.txt","DTC_H.txt","MENU.txt","ROOT.txt","EXCEL.xls","QuickInfo.txt"]
             elif self.ObjSelect.get()=="所有.txt":
-                FileTypeList = ["ROOT.txt","MENU.txt","TEXT.txt","DS.txt","DTC_H.txt","DTC.txt","QuickInfo.txt"]
+                FileTypeList = ["ROOT.txt","MENU.txt","TEXT.txt","DS.txt","DTC_H.txt","DTC.txt","QuickInfo.txt","idm_2_module.txt"]
             else:
                 FileTypeList = [self.ObjSelect.get()]
             
@@ -423,6 +584,9 @@ class myTranslator:
                 file_target_dir = os.path.dirname(file_target)
                 if not os.path.exists(file_target_dir):
                     os.makedirs(file_target_dir)
+                 # 如果文件名以 CN_ 开头，则替换为当前翻译语言的前两个字母
+                if file.find("CN_")!=-1:
+                    file_target = file_target.replace("CN_", self.TargeLanguage[:2] + "_")
                 if file.endswith(".ini"):
                     try:
                         with open(file, r"r", encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Read:
@@ -583,6 +747,10 @@ class myTranslator:
             self.CRootToOther()
         elif self.FileType == "QuickInfo.txt":
             self.CQuickInfoToOther()
+        elif self.FileType == "idm_2_module.txt":
+            self.CIdm2ModuleToOther()
+        elif self.FileType == "EXCEL.xls":
+            self.CExcelToOther()
         self.UpDict()
         #self.UpProgramXls()
         self.UpdataLog("*******************************************************成功翻译："+Language+"_"+self.FileType+"\n")
@@ -868,6 +1036,24 @@ class myTranslator:
             except Exception as e:
                 self.UpdataLog(self.CNFile+" 错误信息："+ str(e))
 
+    def CIdm2ModuleToOther(self):
+        if os.path.exists(self.CNFile):
+            try:
+                with open(self.CNFile,r"r",encoding = self.encodingDict["CN-简体"]) as CN_Read:
+                    with open(self.OutFile,r"w",encoding = self.encodingDict[self.TargeLanguage], errors='replace') as Targe_Write:
+                        for CNLine in CN_Read.readlines():
+                            if CNLine.find("ModuleName")!=-1:
+                                ipos = CNLine.find("=")
+                                CNValue = CNLine[ipos+1:].strip()
+                                ipos = CNValue.find("\t\t")
+                                CNValue = CNValue[0:ipos]
+                                ENValue = self.getTargeValue(CNValue)
+                                Targe_Write.write(CNLine.replace(CNValue,ENValue))
+                            else:
+                                Targe_Write.write(CNLine)
+            except Exception as e:
+                self.UpdataLog(self.CNFile+" 错误信息："+ str(e))
+
     def Menu2dict(self):
         try:
             self.error = "无法打开文件"
@@ -987,107 +1173,108 @@ class myTranslator:
 
     def CNDSToOther(self):
         #self.DS2dict()
-        with open(self.CNFile,r"r",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Read:
-            with open(self.OutFile,r"w",encoding = self.encodingDict[self.TargeLanguage], errors='replace') as Targe_Write:
-                for CNLine in CN_Read.readlines():
-                    CNLine = self.Myfilter(CNLine)
-                    removeBlank = CNLine.strip()
-                    #空行、注释行
-                    if removeBlank=="":
-                        continue
-                    if contains_chinese(removeBlank)==False:
-                        Targe_Write.write(CNLine + "\n")
-                        continue
-                    if CNLine.find("include")!=-1:
-                        Targe_Write.write(CNLine + "\n")
-                        continue
-                    CNLineList = removeBlank.split("\t")
-                    MyRe = r"\"$|^\""
-                    if len(CNLineList)<6:
-                        ENLine = ""
-                        for i in range(len(CNLineList)):
-                            CNValue = re.sub(MyRe,"",CNLineList[i])
-                            if contains_chinese(CNValue)==True:
-                                if i == 3 and CNValue.find("|")!=-1:
-                                    CNValueList = CNValue.split("|")
-                                    ENValue = ""
-                                    for CNOneValue in CNValueList:
-                                        CNOneValue = CNOneValue.strip()
-                                        if CNOneValue!="":
-                                            CNOneValue = self.getTargeValue(CNOneValue)
-                                        ENValue = ENValue + CNOneValue
-                                        ENValue = ENValue+"|"
-                                    ENValue = ENValue[0:-1]
-                                    CNLineList[3] = CNLineList[3].replace(CNValue,ENValue)
-                                else:
-                                    ENValue = self.getTargeValue(CNValue)
-                                    CNLineList[i] = CNLineList[i].replace(CNValue,ENValue)
-                        for i in CNLineList:
-                            ENLine = ENLine+ i +"\t"
-                        ENLine = ENLine[0:-1]
-                        Targe_Write.write(ENLine+"\n")
-                    else:
-                        CNName = re.sub(MyRe,"",CNLineList[1])
-                        ENName = ""
-                        if CNName!="":
-                            ENName = self.getTargeValue(CNName)
-                        CNUnit = CNLineList[2]
-                        if re.sub(MyRe,"",CNUnit).strip() in self.UNIT_dict:
-                            ENUnit = "\"" +self.UNIT_dict[re.sub(MyRe,"",CNUnit).strip()] +"\""
-                        elif contains_chinese(re.sub(MyRe,"",CNUnit).strip())==True:
-                            ENUnit = self.getTargeValue(re.sub(MyRe,"",CNUnit).strip())
-                            ENUnit = "\"" +ENUnit +"\""
-                            self.UNIT_dict[CNUnit] = ENUnit
-                        else:
-                            ENUnit = "\"" +re.sub(MyRe,"",CNUnit).strip() +"\""
-                            self.UNIT_dict[ENUnit] = ENUnit
-                        CNMore = re.sub(MyRe,"",CNLineList[4])
-                        if contains_chinese(CNMore)==True:
-                            ENValue = ""
-                            CNMores = CNMore.split(";")
-                            if len(CNMores)>1:
-                                for CNValue in CNMores:
-                                    #获取CNMone中最后一个空格的位置
-                                    ipos = CNValue.rfind(" ")
-                                    if ipos!=-1:
-                                        CNValue = CNValue[ipos+1:]
-                                        ENValue = self.getTargeValue(CNValue)
-                                        CNLineList[4] = CNLineList[4].replace(CNValue,ENValue)
-                            else:
-                                CNMores = extract_chinese_from_ternary(CNMore)
-                                if len(CNMores)>0:
-                                    for CNValue in CNMores:
-                                        ENValue = self.getTargeValue(CNValue)
-                                        CNLineList[4] = CNLineList[4].replace(CNValue,ENValue)
-                        try:
-                            CNValue = re.sub(MyRe,"",CNLineList[3])
-                            CNValueList = CNValue.split("|")
-                            ENValue = ""
-                            for CNOneValue in CNValueList:
-                                CNOneValue = CNOneValue.strip()
-                                
-                                if CNOneValue.find("%.")!=-1 or CNOneValue.find("%d")!=-1:
-                                    ENValue = CNOneValue
-                                else:
-                                    if CNOneValue!="":
-                                        CNOneValue = self.getTargeValue(CNOneValue)
-                                    ENValue = ENValue + CNOneValue
-                                ENValue = ENValue+"|"
-                            ENValue = ENValue[0:-1]
+        if os.path.exists(self.CNFile):
+            with open(self.CNFile,r"r",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Read:
+                with open(self.OutFile,r"w",encoding = self.encodingDict[self.TargeLanguage], errors='replace') as Targe_Write:
+                    for CNLine in CN_Read.readlines():
+                        CNLine = self.Myfilter(CNLine)
+                        removeBlank = CNLine.strip()
+                        #空行、注释行
+                        if removeBlank=="":
+                            continue
+                        if contains_chinese(removeBlank)==False:
+                            Targe_Write.write(CNLine + "\n")
+                            continue
+                        if CNLine.find("include")!=-1:
+                            Targe_Write.write(CNLine + "\n")
+                            continue
+                        CNLineList = removeBlank.split("\t")
+                        MyRe = r"\"$|^\""
+                        if len(CNLineList)<6:
                             ENLine = ""
-                            CNLine = ""
-                            for i in CNLineList:
-                                CNLine = CNLine+ i +"\t"
-                            CNLineList[1] = CNLineList[1].replace(CNName,ENName)
-                            CNLineList[2] = CNLineList[2].replace(CNUnit,ENUnit)
-                            CNLineList[3] = CNLineList[3].replace(CNValue,ENValue)
+                            for i in range(len(CNLineList)):
+                                CNValue = re.sub(MyRe,"",CNLineList[i])
+                                if contains_chinese(CNValue)==True:
+                                    if i == 3 and CNValue.find("|")!=-1:
+                                        CNValueList = CNValue.split("|")
+                                        ENValue = ""
+                                        for CNOneValue in CNValueList:
+                                            CNOneValue = CNOneValue.strip()
+                                            if CNOneValue!="":
+                                                CNOneValue = self.getTargeValue(CNOneValue)
+                                            ENValue = ENValue + CNOneValue
+                                            ENValue = ENValue+"|"
+                                        ENValue = ENValue[0:-1]
+                                        CNLineList[3] = CNLineList[3].replace(CNValue,ENValue)
+                                    else:
+                                        ENValue = self.getTargeValue(CNValue)
+                                        CNLineList[i] = CNLineList[i].replace(CNValue,ENValue)
                             for i in CNLineList:
                                 ENLine = ENLine+ i +"\t"
                             ENLine = ENLine[0:-1]
-                            CNLine = CNLine[0:-1]
                             Targe_Write.write(ENLine+"\n")
-                        except Exception as e:
-                            self.UpdataLog("CN_DS、"+CNLine+" 格式有问题"+ str(e))                        
+                        else:
+                            CNName = re.sub(MyRe,"",CNLineList[1])
+                            ENName = ""
+                            if CNName!="":
+                                ENName = self.getTargeValue(CNName)
+                            CNUnit = CNLineList[2]
+                            if re.sub(MyRe,"",CNUnit).strip() in self.UNIT_dict:
+                                ENUnit = "\"" +self.UNIT_dict[re.sub(MyRe,"",CNUnit).strip()] +"\""
+                            elif contains_chinese(re.sub(MyRe,"",CNUnit).strip())==True:
+                                ENUnit = self.getTargeValue(re.sub(MyRe,"",CNUnit).strip())
+                                ENUnit = "\"" +ENUnit +"\""
+                                self.UNIT_dict[CNUnit] = ENUnit
+                            else:
+                                ENUnit = "\"" +re.sub(MyRe,"",CNUnit).strip() +"\""
+                                self.UNIT_dict[ENUnit] = ENUnit
+                            CNMore = re.sub(MyRe,"",CNLineList[4])
+                            if contains_chinese(CNMore)==True:
+                                ENValue = ""
+                                CNMores = CNMore.split(";")
+                                if len(CNMores)>1:
+                                    for CNValue in CNMores:
+                                        #获取CNMone中最后一个空格的位置
+                                        ipos = CNValue.rfind(" ")
+                                        if ipos!=-1:
+                                            CNValue = CNValue[ipos+1:]
+                                            ENValue = self.getTargeValue(CNValue)
+                                            CNLineList[4] = CNLineList[4].replace(CNValue,ENValue)
+                                else:
+                                    CNMores = extract_chinese_from_ternary(CNMore)
+                                    if len(CNMores)>0:
+                                        for CNValue in CNMores:
+                                            ENValue = self.getTargeValue(CNValue)
+                                            CNLineList[4] = CNLineList[4].replace(CNValue,ENValue)
+                            try:
+                                CNValue = re.sub(MyRe,"",CNLineList[3])
+                                CNValueList = CNValue.split("|")
+                                ENValue = ""
+                                for CNOneValue in CNValueList:
+                                    CNOneValue = CNOneValue.strip()
+                                    
+                                    if CNOneValue.find("%.")!=-1 or CNOneValue.find("%d")!=-1:
+                                        ENValue = CNOneValue
+                                    else:
+                                        if CNOneValue!="":
+                                            CNOneValue = self.getTargeValue(CNOneValue)
+                                        ENValue = ENValue + CNOneValue
+                                    ENValue = ENValue+"|"
+                                ENValue = ENValue[0:-1]
+                                ENLine = ""
+                                CNLine = ""
+                                for i in CNLineList:
+                                    CNLine = CNLine+ i +"\t"
+                                CNLineList[1] = CNLineList[1].replace(CNName,ENName)
+                                CNLineList[2] = CNLineList[2].replace(CNUnit,ENUnit)
+                                CNLineList[3] = CNLineList[3].replace(CNValue,ENValue)
+                                for i in CNLineList:
+                                    ENLine = ENLine+ i +"\t"
+                                ENLine = ENLine[0:-1]
+                                CNLine = CNLine[0:-1]
+                                Targe_Write.write(ENLine+"\n")
+                            except Exception as e:
+                                self.UpdataLog("CN_DS、"+CNLine+" 格式有问题"+ str(e))                        
 
     def DS2dict(self):
         try:
@@ -1533,20 +1720,27 @@ class myTranslator:
             if self.strVehicel=="":
                 return 0
             self.CNFileNew = self.DataPath+"CN_NeedTrans.txt"
-            if os.path.exists(self.CNFileNew):
-                os.remove(self.CNFileNew)
             self.ObjSelect.update()
             if self.ObjSelect.get()=="所有.txt":
-                FileTypeList = ["ROOT.txt","MENU.txt","DS.txt","DTC_H.txt","DTC.txt","TEXT.txt","QuickInfo.txt"]
+                FileTypeList = ["ROOT.txt","MENU.txt","DS.txt","DTC_H.txt","DTC.txt","TEXT.txt","QuickInfo.txt","idm_2_module.txt"]
             else:
                 FileTypeList = [self.ObjSelect.get()]
             empty_set = set()
             for FileType in FileTypeList:
                 self.FileType = FileType
-                self.GetFun(empty_set)
-            with open(self.CNFileNew,r"w",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Write:
-                for k in empty_set:
-                    CN_Write.write(k + "\n")
+                if self.FileType=="EXCEL.xls":
+                    self.GetExcelInfo()
+                    return 0
+                else:
+                    self.GetFun(empty_set)
+            if self.AppendFile.get() == 1:
+                with open(self.CNFileNew,r"a",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Write:
+                    for k in empty_set:
+                        CN_Write.write(k + "\n")
+            else:
+                with open(self.CNFileNew,r"w",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Write:
+                    for k in empty_set:
+                        CN_Write.write(k + "\n")
             self.UpdataLog("********************************全部提取完成********************************")
             self.mylog()
 
@@ -1592,9 +1786,14 @@ class myTranslator:
                     continue  # 跳过后继续下一个文件
             self.progress["value"] += 1
             self.MyGUI.update()
-        with open(self.DataPath+"CN_NeedTrans.txt",r"w",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Write:
-            for k in empty_set:
-                CN_Write.write(k + "\n")
+        if self.AppendFile.get() == 1:
+            with open(self.DataPath+"CN_NeedTrans.txt",r"a",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Write:
+                for k in empty_set:
+                    CN_Write.write(k + "\n")
+        else:
+            with open(self.DataPath+"CN_NeedTrans.txt",r"w",encoding = self.encodingDict["CN-简体"], errors='replace') as CN_Write:
+                for k in empty_set:
+                    CN_Write.write(k + "\n")
         self.UpdataLog("*******************************************************提取完成")
 
     def GetFun(self, empty_set):
@@ -1621,52 +1820,58 @@ class myTranslator:
                     CNLists = line.split("\t")
                     MyRe = r"\"$|^\""
                     for CN in CNLists:
-                        index_position = CNLists.index(CN)
-                        if self.FileType=="MENU.txt":
-                            CNValue = CN
-                            ipos = CNValue.find("<")
-                            if ipos!=-1:
-                                CNValue = CNValue[0:ipos]
-                            empty_set.add(CNValue.strip())
-                        elif self.FileType=="ROOT.txt":
-                            CNValue = CN
-                            header = CNValue[0:2]
-                            if header.find("@")!=-1:
-                                CNValue = CNValue[2:]
-                            ipos = CNValue.find("<")
-                            if ipos!=-1:
-                                CNValue = CNValue[0:ipos]
-                            empty_set.add(CNValue.strip())
-                        elif self.FileType=="DS.txt" and index_position>0:
-                            CNValue = re.sub(MyRe,"",CN.strip())
-                            if CNValue.find("|")!=-1:
-                                CNValueN = CNValue.split("|")
-                                for k in CNValueN:
-                                    empty_set.add(k.strip())
-                            if index_position==2 or index_position==1:
+                        if contains_chinese(CN)==TRUE:
+                            index_position = CNLists.index(CN)
+                            if self.FileType=="MENU.txt":
+                                CNValue = CN
+                                ipos = CNValue.find("<")
+                                if ipos!=-1:
+                                    CNValue = CNValue[0:ipos]
                                 empty_set.add(CNValue.strip())
-                            if index_position==4:
-                                if contains_chinese(CNValue):
-                                    CNValues = CNValue.split(";")
-                                    if len(CNValues)>1:
-                                        for k in CNValues:
-                                            ipos = k.rfind(" ")
-                                            if ipos!=-1:
-                                                empty_set.add(k[ipos+1:].strip())
-                                    else:
-                                        CNValues = extract_chinese_from_ternary(CNValue)
-                                        if len(CNValues)>0:
+                            elif self.FileType=="ROOT.txt":
+                                CNValue = CN
+                                header = CNValue[0:2]
+                                if header.find("@")!=-1:
+                                    CNValue = CNValue[2:]
+                                ipos = CNValue.find("<")
+                                if ipos!=-1:
+                                    CNValue = CNValue[0:ipos]
+                                empty_set.add(CNValue.strip())
+                            elif self.FileType=="DS.txt" and index_position>0:
+                                CNValue = re.sub(MyRe,"",CN.strip())
+                                if CNValue.find("|")!=-1:
+                                    CNValueN = CNValue.split("|")
+                                    for k in CNValueN:
+                                        empty_set.add(k.strip())
+                                if index_position==2 or index_position==1:
+                                    empty_set.add(CNValue.strip())
+                                if index_position==4:
+                                    if contains_chinese(CNValue):
+                                        CNValues = CNValue.split(";")
+                                        if len(CNValues)>1:
                                             for k in CNValues:
-                                                empty_set.add(k.strip())
-                        elif self.FileType=="QuickInfo.txt":
-                            if CN.find("GroupName")!= -1 or CN.find("SySName")!=-1:
-                                ipos = CN.find("=")
-                                CNValue = CN[ipos+1:].strip()
-                                empty_set.add(CNValue.strip())
-                        else:
-                            CNValue = re.sub(MyRe,"",CN.strip())
-                            if contains_chinese(CNValue):
-                                empty_set.add(CNValue.strip())
+                                                ipos = k.rfind(" ")
+                                                if ipos!=-1:
+                                                    empty_set.add(k[ipos+1:].strip())
+                                        else:
+                                            CNValues = extract_chinese_from_ternary(CNValue)
+                                            if len(CNValues)>0:
+                                                for k in CNValues:
+                                                    empty_set.add(k.strip())
+                            elif self.FileType=="QuickInfo.txt":
+                                if CN.find("GroupName")!= -1 or CN.find("SySName")!=-1:
+                                    ipos = CN.find("=")
+                                    CNValue = CN[ipos+1:].strip()
+                                    empty_set.add(CNValue.strip())
+                            elif self.FileType=="idm_2_module.txt":
+                                if CN.find("ModuleName")!= -1:
+                                    ipos = CN.find("=")
+                                    CNValue = CN[ipos+1:].strip()
+                                    empty_set.add(CNValue.strip())
+                            else:
+                                CNValue = re.sub(MyRe,"",CN.strip())
+                                if contains_chinese(CNValue):
+                                    empty_set.add(CNValue.strip())
                     self.progress["value"] += 1
                     self.MyGUI.update()
         except FileNotFoundError:
